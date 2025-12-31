@@ -27,8 +27,8 @@ AI 视频生成与复刻工具，支持 **Seedance**、**Sora2** 和 **Sora2免�
 
 1. **克隆项目**
 ```bash
-git clone <repository-url>
-cd replicate_sora2
+git clone https://github.com/xiaohuihui202504/AI-video-Replicate.git
+cd AI-video-Replicate   
 ```
 
 2. **安装依赖**
