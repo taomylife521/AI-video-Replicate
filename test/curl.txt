@@ -1,0 +1,46 @@
+--请求
+curl --location --request POST 'https://api.jxincm.cn/v1/video/create' \
+--header 'Authorization: Bearer sk-xxxxx' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+    "images": [],
+    "model": "sora-2",
+    "orientation": "portrait",
+    "prompt": "A bearded man in a black t-shirt pours steaming coffee from a glass kettle into a detailed red V8 engine-shaped ceramic mug on a rustic wooden table inside a warmly lit, cozy coffee shop with vintage decor; the camera then cuts to a close-up of the mug emitting thick steam as the man reacts with surprise and delight; next, the scene transitions to a gym setting where the same mug sits on a black leather bench surrounded by dumbbells and weight machines, steam rising dramatically as coffee is poured; finally, the mug is showcased in a studio shot against a dark background with bokeh lights, rotating slowly to highlight its intricate mechanical details including chrome bolts, pulleys, and exhaust pipes, all rendered in hyper-realistic 4K cinematic quality with dynamic lighting that emphasizes metallic reflections and glossy textures.",
+    "size": "large",
+    "duration": 15,
+    "watermark": false,
+    "private": true
+}'
+
+--返回
+{
+    "id": "video_b1deb3db-3ed7-408c-98fb-d7f317090383",
+    "object": "video",
+    "model": "sora-2",
+    "status": "queued",
+    "progress": 0,
+    "created_at": 1767020439,
+    "seconds": "15",
+    "size": "720x1280",
+    "detail": {}
+}
+
+--请求 通过  "id": "video_b1deb3db-3ed7-408c-98fb-d7f317090383" 获取视频链接
+curl --location --request GET 'https://api.jxincm.cn/v1/video/query?id=video_b1deb3db-3ed7-408c-98fb-d7f317090383' \
+--header 'Authorization: Bearer sk-xxxx'
+
+--返回
+{
+    "id": "video_b1deb3db-3ed7-408c-98fb-d7f317090383",
+    "size": "720x1280",
+    "model": "sora-2",
+    "detail": {},
+    "object": "video",
+    "status": "completed",
+    "seconds": "15",
+    "progress": 100,
+    "video_url": "https://midjourney-plus.oss-us-west-1.aliyuncs.com/sora/cc89e21e-7519-4a40-8197-af0cd8b03f46.mp4",
+    "created_at": 1767020439,
+    "completed_at": 1767020671
+}

@@ -1,0 +1,57 @@
+### Style
+* **Visual Texture:** AI-generated hyper-realism with a digital, polished commercial finish. The surfaces of the mug exhibit a metallic sheen and high-gloss plastic texture. The steam is thick and voluminous, appearing almost like heavy smoke or a fog machine effect rather than natural coffee steam.
+* **Lighting Quality:** High-contrast commercial lighting. The indoor cafe scene uses warm, diffused ambient light, while the gym scene features cooler, brighter overhead lighting that creates sharp reflections on the metallic "exhaust pipes."
+* **Color Palette:** Dominated by a vibrant "racing red" and metallic chrome silver. The coffee provides a deep, dark brown contrast, set against neutral backgrounds like wood, gym leather, and soft-focus cafe interiors.
+* **Atmosphere:** Energetic, humorous, and consumer-focused. It carries a "wow factor" designed for viral social media engagement, emphasizing the novelty of the product.
+
+### Cinematography
+* **Camera:** A mix of static medium shots and a close-up handheld-style rotation. The camera remains mostly stable to focus on the "exhaust" effect of the steam, while the final shot uses a dynamic 360-degree manual rotation.
+* **Lens:** Standard to medium-telephoto lens with a shallow depth of field. The backgrounds (cafe patrons, gym equipment) are softly blurred (bokeh) to keep the viewer’s attention strictly on the V8 mug.
+* **Lighting:** Three-point lighting setup simulated in an AI environment. Key light emphasizes the "V8" logo, while rim lighting defines the edges of the chrome components and the handle.
+* **Mood:** Enthusiastic and masculine, blending "car culture" with everyday morning routines.
+
+---
+
+### Scene Breakdown
+
+**Scene 1 (0:00s - 0:04s):**
+A bearded man in a brown workwear jacket sits at a rustic wooden table in a crowded cafe. He pours dark coffee from a glass carafe into a detailed, red V8 engine-shaped mug. As the liquid enters, thick white steam billows aggressively from the eight chrome exhaust pipes on the sides of the mug. The man looks up at the camera with a wide-eyed expression of comedic shock and delight.
+
+**Actions:**
+* The man's hand tilts the carafe steadily.
+* The "exhaust" steam pulses out of the pipes in sync with the pour.
+* The man’s facial expression transitions from focused to exaggerated surprise.
+
+**Dialogue:**
+* None
+
+**Background Sound:**
+High-energy, operatic rock music with heavy guitar riffs and powerful vocals.
+
+**Scene 2 (0:05s - 0:09s):**
+The scene shifts to a weightlifting bench inside a gym. The V8 mug sits prominently on the black leather padding. A stainless steel pitcher pours coffee into the mug. The same intense white steam pours out of the side pipes, creating a "cold start" engine effect amidst the gym equipment and weights in the background.
+
+**Actions:**
+* Smooth, continuous pour of coffee.
+* Thick steam clouds rise and dissipate quickly, mimicking a revving engine.
+* Shallow focus keeps the background gym equipment as a contextual blur.
+
+**Dialogue:**
+* None
+
+**Background Sound:**
+Continuation of high-energy rock music.
+
+**Scene 3 (0:10s - 0:17s):**
+A close-up "product hero shot" on a dark, textured wooden surface. A hand reaches in to grab the handle of the V8 mug and lifts it slightly, rotating it to showcase the intricate mechanical details: the chrome intake manifold, the pulleys on the front, and the "V8" branding. The mug is full of coffee, and the chrome parts glisten under a direct light source.
+
+**Actions:**
+* Hand enters frame to grip the handle.
+* The mug is rotated slowly to show all sides of the engine mold.
+* Subtle micro-vibrations in the hand give it a handheld, realistic feel.
+
+**Dialogue:**
+* None
+
+**Background Sound:**
+The music reaches a crescendo with high-pitched operatic vocals.

@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  ai-video-replicate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ai-video-replicate:latest
+    container_name: ai-video-replicate
+    ports:
+      - "7860:7860"
+    environment:
+      # Seedance 配置
+      - SEEDANCE_API_BASE_URL=${SEEDANCE_API_BASE_URL:-https://seedanceapi.duckcloud.fun}
+      - SEEDANCE_AUTH_TOKEN=${SEEDANCE_AUTH_TOKEN:-}
+      # Sora2 配置
+      - SORA2_API_BASE_URL=${SORA2_API_BASE_URL:-https://api.jxincm.cn}
+      - SORA2_API_KEY=${SORA2_API_KEY:-}
+      - SORA2_ENABLED=${SORA2_ENABLED:-true}
+      # Sora2免费 配置
+      - SORA2FREE_API_BASE_URL=${SORA2FREE_API_BASE_URL:-https://rendersora2api.duckcloud.fun}
+      - SORA2FREE_API_KEY=${SORA2FREE_API_KEY:-}
+      # Qwen3-VL 配置
+      - QWEN_API_BASE_URL=${QWEN_API_BASE_URL:-https://api-inference.modelscope.cn/v1}
+      - QWEN_API_KEY=${QWEN_API_KEY:-}
+      - QWEN_MODEL_ID=${QWEN_MODEL_ID:-Qwen/Qwen3-VL-8B-Instruct}
+      # Gradio 配置
+      - GRADIO_PORT=7860
+    volumes:
+      # 可选: 挂载临时目录用于视频缓存
+      - /tmp/video-generator:/tmp
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
