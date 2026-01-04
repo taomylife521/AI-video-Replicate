@@ -1,1 +1,5 @@
 .env
+.ipynb_checkpoints/docker-compose-checkpoint.yml
+.ipynb_checkpoints/Dockerfile-checkpoint
+.ipynb_checkpoints/README-checkpoint.md
+.claude/settings.local.json

@@ -226,7 +226,7 @@ def image_to_base64(image_path: str) -> str:
 
 
 def analyze_video(video_path: str, prompt: str = None, stream: bool = True,
-                   num_frames: int = MAX_FRAMES, sora2_mode: bool = False) -> str:
+                   num_frames: int = MAX_FRAMES, sora2_mode: bool = False, keep_frames: bool = False):
     """
     使用 Qwen3-VL 模型分析视频内容
 
@@ -236,9 +236,11 @@ def analyze_video(video_path: str, prompt: str = None, stream: bool = True,
         stream: 是否使用流式输出
         num_frames: 提取的帧数
         sora2_mode: 是否启用 SORA2 提示词生成模式
+        keep_frames: 是否保留提取的帧文件 (默认False，分析完即删)
 
     Returns:
-        视频内容描述或 SORA2 提示词
+        如果 keep_frames=True，返回 (result, frames) 元组
+        否则返回 result 字符串
     """
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"视频文件不存在: {video_path}")
@@ -333,16 +335,17 @@ def analyze_video(video_path: str, prompt: str = None, stream: bool = True,
         print(result)
 
     # 清理临时文件
-    for frame_path in frames:
+    if not keep_frames:
+        for frame_path in frames:
+            try:
+                os.remove(frame_path)
+            except Exception:
+                pass
+
         try:
-            os.remove(frame_path)
+            os.rmdir(os.path.dirname(frames[0]))
         except Exception:
             pass
-
-    try:
-        os.rmdir(os.path.dirname(frames[0]))
-    except Exception:
-        pass
 
     if sora2_mode:
         print("\n" + "=" * 50)
@@ -350,6 +353,8 @@ def analyze_video(video_path: str, prompt: str = None, stream: bool = True,
         print("💡 提示: 可直接复制上方 English Version 用于 SORA2")
         print("=" * 50)
 
+    if keep_frames:
+        return result, frames
     return result
 
 

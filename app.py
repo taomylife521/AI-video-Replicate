@@ -14,8 +14,11 @@ import httpx
 import ssl
 import base64
 import gradio as gr
+import importlib
 from pathlib import Path
 from dotenv import load_dotenv
+import qwen3vl
+importlib.reload(qwen3vl)
 from qwen3vl import analyze_video
 
 load_dotenv()
@@ -386,13 +389,15 @@ def get_sora2free_auth_headers() -> dict:
     return headers
 
 
-def create_sora2free_video(prompt: str, model: str) -> dict:
+def create_sora2free_video(prompt: str, model: str, image_urls: list = None) -> dict:
     """
-    创建 Sora2免费 视频任务 (SSE 流式响应)
+    创建 Sora2免费 视频任务
+    支持文生视频(SSE流式响应)和图生视频(直接JSON响应)两种模式
 
     Args:
         prompt: 视频描述提示词
         model: 模型名称
+        image_urls: 图片URL列表 (base64 data URL 格式，用于图生视频模式)
 
     Returns:
         包含视频URL的字典
@@ -402,13 +407,40 @@ def create_sora2free_video(prompt: str, model: str) -> dict:
 
     try:
         import re
+        import json as json_module
+
+        # 判断是否为图生视频模式
+        is_image_to_video = image_urls and len(image_urls) > 0
+
+        # 构建 messages content
+        if is_image_to_video:
+            # 图生视频模式：content 为数组，包含 text 和 image_url
+            content = [
+                {
+                    "type": "text",
+                    "text": prompt
+                }
+            ]
+            # 添加所有图片
+            for img_url in image_urls:
+                content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": img_url
+                    }
+                })
+            print(f"[Sora2免费] 📸 图生视频模式，使用 {len(image_urls)} 张图片")
+        else:
+            # 文生视频模式：content 为字符串
+            content = prompt
+            print(f"[Sora2免费] 📝 文生视频模式")
 
         payload = {
             "model": model,
             "messages": [
                 {
                     "role": "user",
-                    "content": prompt
+                    "content": content
                 }
             ],
             "stream": True
@@ -419,8 +451,12 @@ def create_sora2free_video(prompt: str, model: str) -> dict:
         print(f"[Sora2免费] 发送请求: {url}")
         print(f"[Sora2免费] 模型: {model}")
 
-        # 发送 SSE 请求
-        with httpx.Client(timeout=300.0) as client:
+        # 图生视频需要更长的超时时间（最长10分钟）
+        timeout_seconds = 600.0 if is_image_to_video else 300.0
+        print(f"[Sora2免费] 超时时间: {timeout_seconds}秒")
+
+        # 发送请求
+        with httpx.Client(timeout=timeout_seconds) as client:
             with client.stream(
                 "POST",
                 url,
@@ -428,41 +464,109 @@ def create_sora2free_video(prompt: str, model: str) -> dict:
                 headers=get_sora2free_auth_headers()
             ) as response:
                 if response.status_code != 200:
-                    error_text = response.text[:500] if response.text else "无响应内容"
-                    return {"success": False, "message": f"请求失败: HTTP {response.status_code}\n{error_text}"}
+                    error_text = ""
+                    try:
+                        for chunk in response.iter_bytes():
+                            error_text += chunk.decode('utf-8', errors='ignore')
+                            if len(error_text) > 500:
+                                break
+                    except:
+                        pass
+                    return {"success": False, "message": f"请求失败: HTTP {response.status_code}\n{error_text[:500]}"}
 
-                # 解析 SSE 流，提取视频URL
+                # 收集完整响应内容
                 video_url = None
                 full_content = ""
+                result_urls = []
+                raw_response = ""
 
                 for line in response.iter_lines():
                     if line:
-                        # SSE 格式: data: {...}
                         line = line.decode('utf-8') if isinstance(line, bytes) else line
+                        raw_response += line + "\n"
+                        print(f"[Sora2免费] 收到数据: {line[:200]}...")  # 调试日志
+
+                        # 尝试解析 SSE 格式: data: {...}
                         if line.startswith('data: '):
                             data = line[6:]  # 去掉 'data: '
                             if data == '[DONE]':
-                                break
+                                continue
                             try:
-                                import json as json_module
                                 chunk = json_module.loads(data)
+
+                                # 检查是否是最终结果格式 (包含 result_urls)
+                                if chunk.get('result_urls'):
+                                    result_urls = chunk.get('result_urls', [])
+                                    if result_urls:
+                                        video_url = result_urls[0]
+                                        print(f"[Sora2免费] ✅ 从 SSE result_urls 提取到视频URL: {video_url}")
+                                        break
+
+                                # 检查 SSE delta 格式
                                 delta = chunk.get('choices', [{}])[0].get('delta', {})
-                                content = delta.get('content', '')
-                                if content:
-                                    full_content += content
+                                content_text = delta.get('content', '')
+                                if content_text:
+                                    full_content += content_text
                                     # 从 HTML 格式提取视频URL
-                                    # 格式: ```html\n<video src='https://xxx.mp4' controls></video>\n```
-                                    video_match = re.search(r"src='(https?://[^']+\.mp4)'", content)
+                                    video_match = re.search(r"src='(https?://[^']+)'", content_text)
                                     if video_match:
                                         video_url = video_match.group(1)
-                                        print(f"[Sora2免费] ✅ 提取到视频URL: {video_url}")
+                                        print(f"[Sora2免费] ✅ 从 HTML 提取到视频URL: {video_url}")
                             except json_module.JSONDecodeError:
-                                continue
+                                pass
+                        else:
+                            # 尝试直接解析为 JSON（图生视频可能返回直接 JSON）
+                            try:
+                                result = json_module.loads(line)
+                                # 检查是否包含 result_urls
+                                if result.get('result_urls'):
+                                    result_urls = result.get('result_urls', [])
+                                    if result_urls:
+                                        video_url = result_urls[0]
+                                        print(f"[Sora2免费] ✅ 从 JSON result_urls 提取到视频URL: {video_url}")
+                                        break
+                                # 检查 status 字段
+                                if result.get('status') == 'success' and result.get('result_urls'):
+                                    result_urls = result.get('result_urls', [])
+                                    if result_urls:
+                                        video_url = result_urls[0]
+                                        print(f"[Sora2免费] ✅ 从成功响应提取到视频URL: {video_url}")
+                                        break
+                            except json_module.JSONDecodeError:
+                                pass
+
+                # 如果还没找到，尝试从完整响应中解析
+                if not video_url and raw_response:
+                    # 尝试找到 JSON 对象
+                    try:
+                        # 查找包含 result_urls 的 JSON
+                        json_match = re.search(r'\{[^{}]*"result_urls"[^{}]*\[.*?\][^{}]*\}', raw_response, re.DOTALL)
+                        if json_match:
+                            result = json_module.loads(json_match.group())
+                            result_urls = result.get('result_urls', [])
+                            if result_urls:
+                                video_url = result_urls[0]
+                                print(f"[Sora2免费] ✅ 从原始响应正则匹配提取到视频URL: {video_url}")
+                    except:
+                        pass
+
+                    # 尝试解析整个响应
+                    if not video_url:
+                        try:
+                            result = json_module.loads(raw_response.strip())
+                            if result.get('result_urls'):
+                                result_urls = result.get('result_urls', [])
+                                if result_urls:
+                                    video_url = result_urls[0]
+                                    print(f"[Sora2免费] ✅ 从完整响应解析提取到视频URL: {video_url}")
+                        except:
+                            pass
 
                 if video_url:
-                    return {"success": True, "video_url": video_url, "raw_content": full_content}
+                    return {"success": True, "video_url": video_url, "raw_content": full_content, "result_urls": result_urls}
                 else:
-                    return {"success": False, "message": "未在响应中提取到视频URL", "raw_content": full_content}
+                    print(f"[Sora2免费] ❌ 未找到视频URL，原始响应: {raw_response[:1000]}")
+                    return {"success": False, "message": "未在响应中提取到视频URL", "raw_content": raw_response[:2000]}
 
     except httpx.TimeoutException:
         return {"success": False, "message": "请求超时"}
@@ -470,8 +574,8 @@ def create_sora2free_video(prompt: str, model: str) -> dict:
         return {"success": False, "message": f"请求失败: {str(e)}"}
 
 
-def generate_sora2free_video(prompt: str, model: str):
-    """生成 Sora2免费 视频"""
+def generate_sora2free_video(prompt: str, model: str, images=None):
+    """生成 Sora2免费 视频 (支持文生视频和图生视频)"""
     if not prompt or not prompt.strip():
         return None, "❌ 请输入视频描述提示词"
 
@@ -479,9 +583,52 @@ def generate_sora2free_video(prompt: str, model: str):
         return None, "❌ Sora2免费 API Key 未配置"
 
     try:
-        print(f"[Sora2免费] 🎬 正在提交文生视频任务...")
+        # 处理图片参数
+        image_urls = []
+        frame_count = 0
+        upload_count = 0
 
-        create_result = create_sora2free_video(prompt, model)
+        # 统一处理单张图片和多张图片列表
+        image_list = []
+        if images:
+            if isinstance(images, list):
+                image_list = images
+            else:
+                image_list = [images]
+
+        if image_list:
+            print(f"[Sora2免费] 📤 正在处理 {len(image_list)} 张图片...")
+            for img_path in image_list:
+                if img_path:
+                    # 使用已有的 upload_image_to_url 函数转换为 base64 data URL
+                    image_url = upload_image_to_url(img_path)
+                    if image_url:
+                        image_urls.append(image_url)
+                        # 统计图片来源
+                        if 'frame_' in str(img_path):
+                            frame_count += 1
+                        else:
+                            upload_count += 1
+
+            if image_urls:
+                print(f"[Sora2免费] ✅ 成功处理 {len(image_urls)} 张图片 (关键帧: {frame_count}, 上传图: {upload_count})")
+            else:
+                print(f"[Sora2免费] ⚠️ 图片处理失败，将使用文生视频模式")
+
+        # 确定生成模式
+        if image_urls:
+            if frame_count > 0 and upload_count > 0:
+                mode = f"图生视频(关键帧{frame_count}张+上传图{upload_count}张)"
+            elif frame_count > 0:
+                mode = f"图生视频(关键帧{frame_count}张)"
+            else:
+                mode = f"图生视频(上传图{upload_count}张)"
+        else:
+            mode = "文生视频"
+
+        print(f"[Sora2免费] 🎬 正在提交{mode}任务...")
+
+        create_result = create_sora2free_video(prompt, model, image_urls if image_urls else None)
 
         if not create_result.get("success"):
             return None, f"❌ {create_result.get('message', '未知错误')}"
@@ -492,7 +639,7 @@ def generate_sora2free_video(prompt: str, model: str):
             # 下载视频到本地
             local_path = download_video_to_local(video_url, use_seedance_proxy=False)
             if local_path:
-                return local_path, f"✅ Sora2免费视频生成成功!\n📎 视频URL: {video_url}\n💡 已下载到本地"
+                return local_path, f"✅ Sora2免费视频生成成功! ({mode})\n📎 视频URL: {video_url}\n💡 已下载到本地"
             else:
                 return None, f"⚠️ 视频生成成功但下载失败\n📎 视频URL: {video_url}\n请复制链接手动下载"
         else:
@@ -613,6 +760,7 @@ def generate_seedance_video(prompt: str, model: str, duration: int, ratio: str, 
     try:
         # 如果有图片，先上传
         image_url = None
+        image_source = ""
         if image is not None:
             print("[Seedance] 📤 正在上传图片...")
             upload_result = upload_image(image)
@@ -622,9 +770,14 @@ def generate_seedance_video(prompt: str, model: str, duration: int, ratio: str, 
             if not image_url:
                 return None, "❌ 上传成功但未获取到图片URL"
             print(f"[Seedance] ✅ 图片上传成功: {image_url}")
+            # 判断图片来源
+            if 'frame_' in str(image):
+                image_source = "关键帧"
+            else:
+                image_source = "上传图片"
 
         # 创建视频任务
-        mode = "图生视频" if image_url else "文生视频"
+        mode = f"图生视频({image_source})" if image_url else "文生视频"
         print(f"[Seedance] 🎬 正在提交{mode}任务到远程服务器...")
 
         create_result = create_seedance_video(prompt, model, duration, ratio, image_url)
@@ -693,7 +846,7 @@ def generate_seedance_video(prompt: str, model: str, duration: int, ratio: str, 
         return None, f"❌ 发生错误: {str(e)}"
 
 
-def generate_sora2_video_task(prompt: str, model: str, duration: int, orientation: str, image=None):
+def generate_sora2_video_task(prompt: str, model: str, duration: int, orientation: str, images=None):
     """生成 Sora2 视频 - 包含轮询等待逻辑"""
     if not prompt or not prompt.strip():
         return None, "❌ 请输入视频描述提示词"
@@ -704,16 +857,44 @@ def generate_sora2_video_task(prompt: str, model: str, duration: int, orientatio
     try:
         # 如果有图片，转换为URL
         image_urls = []
-        if image is not None:
-            print("[Sora2] 📤 正在处理图片...")
-            image_url = upload_image_to_url(image)
-            if not image_url:
-                return None, "❌ 图片处理失败"
-            image_urls.append(image_url)
-            print(f"[Sora2] ✅ 图片处理成功")
+        frame_count = 0
+        upload_count = 0
+
+        # 统一处理单张图片和多张图片列表
+        image_list = []
+        if images:
+            if isinstance(images, list):
+                image_list = images
+            else:
+                image_list = [images]
+
+        if image_list:
+            print(f"[Sora2] 📤 正在处理 {len(image_list)} 张图片...")
+            for img_path in image_list:
+                if img_path:
+                    image_url = upload_image_to_url(img_path)
+                    if image_url:
+                        image_urls.append(image_url)
+                        # 统计图片来源
+                        if 'frame_' in str(img_path):
+                            frame_count += 1
+                        else:
+                            upload_count += 1
+
+            if not image_urls:
+                return None, "❌ 图片处理失败，所有图片均无法转换"
+            print(f"[Sora2] ✅ 成功处理 {len(image_urls)} 张图片 (关键帧: {frame_count}, 上传图: {upload_count})")
 
         # 创建视频任务
-        mode = "图生视频" if image_urls else "文生视频"
+        if image_urls:
+            if frame_count > 0 and upload_count > 0:
+                mode = f"图生视频(关键帧{frame_count}张+上传图{upload_count}张)"
+            elif frame_count > 0:
+                mode = f"图生视频(关键帧{frame_count}张)"
+            else:
+                mode = f"图生视频(上传图{upload_count}张)"
+        else:
+            mode = "文生视频"
         print(f"[Sora2] 🎬 正在提交{mode}任务到远程服务器...")
 
         create_result = create_sora2_video(prompt, model, duration, orientation, image_urls)
@@ -790,8 +971,8 @@ def generate_video(provider: str, prompt: str, model: str, duration: int, ratio:
     if provider == "sora2":
         return generate_sora2_video_task(prompt, model, duration, ratio, image)
     elif provider == "sora2free":
-        # Sora2免费 只支持文生视频，不支持图片
-        return generate_sora2free_video(prompt, model)
+        # Sora2免费 支持文生视频和图生视频
+        return generate_sora2free_video(prompt, model, image)
     else:
         return generate_seedance_video(prompt, model, duration, ratio, image)
 
@@ -811,12 +992,12 @@ def load_sample_video():
 
 
 def extract_prompt_from_video(video_path):
-    """从视频中提取提示词"""
+    """从视频中提取提示词和关键帧"""
     if not video_path:
-        return "❌ 请先上传视频", ""
+        return "❌ 请先上传视频", "", [], []
     try:
         print(f"[Gradio] 🔍 正在分析视频提取提示词: {video_path}")
-        result = analyze_video(video_path, sora2_mode=True, stream=False)
+        result, frames = analyze_video(video_path, sora2_mode=True, stream=False, keep_frames=True)
         
         # 提取英文提示词用于生成
         en_match = re.search(r'## SORA2 Prompt \(English\)\s*```\s*(.*?)\s*```', result, re.DOTALL)
@@ -827,9 +1008,10 @@ def extract_prompt_from_video(video_path):
             zh_match = re.search(r'## SORA2 提示词 \(中文\)\s*```\s*(.*?)\s*```', result, re.DOTALL)
             en_prompt = zh_match.group(1).strip() if zh_match else ""
             
-        return result, en_prompt
+        # 返回两次 frames，分别用于 Gallery 显示和 State 存储
+        return result, en_prompt, frames, frames
     except Exception as e:
-        return f"❌ 提示词提取失败: {str(e)}", ""
+        return f"❌ 提示词提取失败: {str(e)}", "", [], []
 
 
 # 构建Gradio界面
@@ -838,11 +1020,14 @@ def create_ui():
         title="视频生成 - Seedance & Sora2 & Sora2免费"
     ) as demo:
 
+        # 状态变量，用于存储提取的视频帧
+        extracted_frames_state = gr.State([])
+
         # 头部
         gr.Markdown(f"""
         # 🎬 AI 视频生成
         **支持 Seedance、Sora2 和 Sora2免费 三种模型提供者**
-
+        
         🔗 Seedance 服务: `{SEEDANCE_API_BASE_URL}`
         🔗 Sora2 服务: `{SORA2_API_BASE_URL}`
         🔗 Sora2免费 服务: `{SORA2FREE_API_BASE_URL}`
@@ -866,7 +1051,20 @@ def create_ui():
                     with gr.Row():
                         load_sample_btn = gr.Button("📂 加载样例视频", variant="secondary", size="sm")
                         clear_video_btn = gr.Button("🗑️ 清空视频", variant="stop", size="sm")
-                    extract_btn = gr.Button("🔍 提取视频提示词", variant="secondary")
+                    extract_btn = gr.Button("🔍 提取视频提示词 & 关键帧", variant="secondary")
+                    
+                    # 关键帧展示
+                    extracted_frames_gallery = gr.Gallery(
+                        label="🎬 提取的关键帧 (Sora2使用全部帧, Seedance使用第1帧)",
+                        show_label=True,
+                        elem_id="gallery",
+                        columns=4,
+                        rows=2,
+                        height=150,
+                        object_fit="contain",
+                        visible=True
+                    )
+                    
                     extraction_result = gr.Textbox(
                         label="提取结果分析",
                         placeholder="提取出的提示词分析将显示在这里...",
@@ -894,7 +1092,7 @@ def create_ui():
 
                 # Sora2免费 每日免费次数提示
                 sora2free_note = gr.Markdown(
-                    "📌 **Sora2免费**：每天免费10次，仅支持文生视频",
+                    "📌 **Sora2免费**：每天免费10次，支持文生视频和图生视频",
                     visible=False
                 )
 
@@ -936,20 +1134,9 @@ def create_ui():
                             interactive=True
                         )
 
-                # 图片上传(可选) - 显示缩略图
-                gr.Markdown("### 视频图片 (Optional)")
-                image = gr.Image(
-                    label="上传参考图片 (图生视频模式)",
-                    type="filepath",
-                    sources=["upload"],
-                    interactive=True,
-                    height=200
-                )
-                image_note = gr.Markdown("*当前模型最多支持1张参考图*", visible=True)
-
                 # 生成按钮
-                gr.Markdown("*提交后请耐心等待，视频生成通常需要1-5分钟*")
-                generate_btn = gr.Button("🎬 生成视频", variant="primary")
+                gr.Markdown("*提交后请耐心等待。如有关键帧，将自动用于图生视频模式提升复刻效果*")
+                generate_btn = gr.Button("🎬 生成视频 (关键帧+提示词)", variant="primary")
 
             # 右侧：输出结果区域
             with gr.Column(scale=1):
@@ -977,8 +1164,6 @@ def create_ui():
                 ratio_value = SORA2_RATIO_OPTIONS[1][0]  # landscape 默认
                 seedance_btns_visible = False
                 sora2_btns_visible = True
-                image_visible = True
-                image_note_visible = True
                 duration_ratio_visible = True
                 sora2free_note_visible = False
                 generate_btn_interactive = SORA2_ENABLED  # 选择 sora2 时根据配置控制按钮
@@ -991,8 +1176,6 @@ def create_ui():
                 ratio_value = None
                 seedance_btns_visible = False
                 sora2_btns_visible = False
-                image_visible = False  # Sora2免费不支持图生视频
-                image_note_visible = False
                 duration_ratio_visible = False  # Sora2免费模型名已包含时长和比例
                 sora2free_note_visible = True
                 generate_btn_interactive = True  # sora2free 始终可用
@@ -1005,8 +1188,6 @@ def create_ui():
                 ratio_value = SEEDANCE_RATIO_OPTIONS[1][0]  # 16:9 默认
                 seedance_btns_visible = True
                 sora2_btns_visible = False
-                image_visible = True
-                image_note_visible = True
                 duration_ratio_visible = True
                 sora2free_note_visible = False
                 generate_btn_interactive = True  # seedance 始终可用
@@ -1017,8 +1198,6 @@ def create_ui():
                 gr.update(choices=ratio_choices, value=ratio_value),
                 gr.update(visible=seedance_btns_visible),
                 gr.update(visible=sora2_btns_visible),
-                gr.update(visible=image_visible),
-                gr.update(visible=image_note_visible),
                 gr.update(visible=duration_ratio_visible),
                 gr.update(visible=sora2free_note_visible),
                 gr.update(interactive=generate_btn_interactive)
@@ -1027,34 +1206,34 @@ def create_ui():
         provider.change(
             fn=update_options_for_provider,
             inputs=[provider],
-            outputs=[model, duration, ratio, seedance_duration_btns, sora2_duration_btns, image, image_note, duration_ratio_row, sora2free_note, generate_btn]
+            outputs=[model, duration, ratio, seedance_duration_btns, sora2_duration_btns, duration_ratio_row, sora2free_note, generate_btn]
         )
 
         # 提取提示词
         extract_btn.click(
             fn=extract_prompt_from_video,
             inputs=[source_video],
-            outputs=[extraction_result, prompt],
+            outputs=[extraction_result, prompt, extracted_frames_gallery, extracted_frames_state],
             show_progress=True
         )
 
         # 加载样例视频
         def handle_load_sample():
             if os.path.exists(SAMPLE_VIDEO_PATH):
-                return SAMPLE_VIDEO_PATH, f"✅ 已加载样例视频: {SAMPLE_VIDEO_PATH}"
+                return SAMPLE_VIDEO_PATH, f"✅ 已加载样例视频: {SAMPLE_VIDEO_PATH}", [], []
             else:
-                return None, f"❌ 样例视频不存在: {SAMPLE_VIDEO_PATH}"
+                return None, f"❌ 样例视频不存在: {SAMPLE_VIDEO_PATH}", [], []
 
         load_sample_btn.click(
             fn=handle_load_sample,
-            outputs=[source_video, extraction_result],
+            outputs=[source_video, extraction_result, extracted_frames_gallery, extracted_frames_state],
             show_progress=True
         )
 
         # 清空视频
         clear_video_btn.click(
-            fn=lambda: (None, ""),
-            outputs=[source_video, extraction_result]
+            fn=lambda: (None, "", [], []),
+            outputs=[source_video, extraction_result, extracted_frames_gallery, extracted_frames_state]
         )
 
         # Seedance 时长快捷按钮
@@ -1068,25 +1247,62 @@ def create_ui():
         btn_15s.click(fn=lambda: "15", outputs=duration)
 
         # 生成视频
-        def process_generate(provider_val, prompt_text, model_text, duration_val, ratio_text, image_file):
+        def process_generate(provider_val, prompt_text, model_text, duration_val, ratio_text, extracted_frames):
+            # 准备图片列表
+            images_to_process = None
+
+            # 验证并清理关键帧列表
+            valid_frames = []
+            if extracted_frames and isinstance(extracted_frames, list):
+                for frame in extracted_frames:
+                    if frame and isinstance(frame, str) and os.path.exists(frame):
+                        valid_frames.append(frame)
+                if valid_frames:
+                    print(f"[Gradio] 📸 检测到 {len(valid_frames)} 张有效关键帧")
+
             if provider_val == "sora2":
                 # Sora2: 转换模型名称和比例
                 model_value = next((m[1] for m in SORA2_MODEL_OPTIONS if m[0] == model_text), SORA2_MODEL_OPTIONS[0][1])
                 ratio_value = next((r[1] for r in SORA2_RATIO_OPTIONS if r[0] == ratio_text), SORA2_RATIO_OPTIONS[0][1])
+
+                # 使用提取的关键帧
+                if valid_frames:
+                    images_to_process = valid_frames
+                    print(f"[Gradio] 🎬 Sora2 将使用 {len(valid_frames)} 张关键帧进行图生视频")
+                else:
+                    images_to_process = None
+                    print("[Gradio] 📝 Sora2 无关键帧，使用纯文生视频模式")
+
             elif provider_val == "sora2free":
-                # Sora2免费: 转换模型名称
+                # Sora2免费: 转换模型名称，支持图生视频
                 model_value = next((m[1] for m in SORA2FREE_MODEL_OPTIONS if m[0] == model_text), SORA2FREE_MODEL_OPTIONS[0][1])
                 ratio_value = ""
+
+                # 使用提取的关键帧
+                if valid_frames:
+                    images_to_process = valid_frames
+                    print(f"[Gradio] 🎬 Sora2免费 将使用 {len(valid_frames)} 张关键帧进行图生视频")
+                else:
+                    images_to_process = None
+                    print("[Gradio] 📝 Sora2免费 无关键帧，使用纯文生视频模式")
             else:
                 # Seedance: 转换模型名称和比例
                 model_value = next((m[1] for m in SEEDANCE_MODEL_OPTIONS if m[0] == model_text), SEEDANCE_MODEL_OPTIONS[0][1])
                 ratio_value = next((r[1] for r in SEEDANCE_RATIO_OPTIONS if r[0] == ratio_text), SEEDANCE_RATIO_OPTIONS[1][1])
 
-            return generate_video(provider_val, prompt_text, model_value, int(duration_val) if duration_val else 5, ratio_value, image_file)
+                # Seedance 只支持单张图片，使用第一张关键帧
+                if valid_frames:
+                    images_to_process = valid_frames[0]  # 使用第一张关键帧
+                    print(f"[Gradio] 🎬 Seedance 使用第一张关键帧作为参考图: {valid_frames[0]}")
+                else:
+                    images_to_process = None
+                    print("[Gradio] 📝 Seedance 无关键帧，使用纯文生视频模式")
+
+            return generate_video(provider_val, prompt_text, model_value, int(duration_val) if duration_val else 5, ratio_value, images_to_process)
 
         generate_btn.click(
             fn=process_generate,
-            inputs=[provider, prompt, model, duration, ratio, image],
+            inputs=[provider, prompt, model, duration, ratio, extracted_frames_state],
             outputs=[video_output, status_output],
             show_progress=True
         )
