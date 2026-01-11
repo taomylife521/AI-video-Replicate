@@ -26,7 +26,7 @@ from qwen3vl import analyze_video
 load_dotenv()
 
 # ========== Seedance API 配置 ==========
-SEEDANCE_API_BASE_URL = os.getenv("SEEDANCE_API_BASE_URL", "http://seedanceapi.duckcloud.fun")
+SEEDANCE_API_BASE_URL = os.getenv("SEEDANCE_API_BASE_URL", "https://seedanceapi.duckcloud.fun")
 SEEDANCE_AUTH_TOKEN = os.getenv("SEEDANCE_AUTH_TOKEN", "sk-doubao-video-2025")
 
 # ========== Sora2 API 配置 ==========
@@ -42,7 +42,7 @@ SORA2FREE_API_KEY = os.getenv("SORA2FREE_API_KEY", "")
 if not SEEDANCE_AUTH_TOKEN:
     SEEDANCE_AUTH_TOKEN = os.getenv("AUTH_TOKEN", "sk-doubao-video-2025")
 if not SEEDANCE_API_BASE_URL:
-    SEEDANCE_API_BASE_URL = os.getenv("API_BASE_URL", "http://seedanceapi.duckcloud.fun")
+    SEEDANCE_API_BASE_URL = os.getenv("API_BASE_URL", "https://seedanceapi.duckcloud.fun")
 
 
 def get_seedance_auth_headers() -> dict:
