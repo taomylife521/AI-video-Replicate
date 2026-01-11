@@ -3,3 +3,4 @@
 .ipynb_checkpoints/Dockerfile-checkpoint
 .ipynb_checkpoints/README-checkpoint.md
 .claude/settings.local.json
+__pycache__/qwen3vl.cpython-312.pyc

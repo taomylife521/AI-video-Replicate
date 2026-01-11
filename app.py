@@ -13,10 +13,12 @@ import tempfile
 import httpx
 import ssl
 import base64
+import io
 import gradio as gr
 import importlib
 from pathlib import Path
 from dotenv import load_dotenv
+from PIL import Image
 import qwen3vl
 importlib.reload(qwen3vl)
 from qwen3vl import analyze_video
@@ -24,7 +26,7 @@ from qwen3vl import analyze_video
 load_dotenv()
 
 # ========== Seedance API 配置 ==========
-SEEDANCE_API_BASE_URL = os.getenv("SEEDANCE_API_BASE_URL", "https://seedanceapi.duckcloud.fun")
+SEEDANCE_API_BASE_URL = os.getenv("SEEDANCE_API_BASE_URL", "http://seedanceapi.duckcloud.fun")
 SEEDANCE_AUTH_TOKEN = os.getenv("SEEDANCE_AUTH_TOKEN", "sk-doubao-video-2025")
 
 # ========== Sora2 API 配置 ==========
@@ -40,7 +42,7 @@ SORA2FREE_API_KEY = os.getenv("SORA2FREE_API_KEY", "")
 if not SEEDANCE_AUTH_TOKEN:
     SEEDANCE_AUTH_TOKEN = os.getenv("AUTH_TOKEN", "sk-doubao-video-2025")
 if not SEEDANCE_API_BASE_URL:
-    SEEDANCE_API_BASE_URL = os.getenv("API_BASE_URL", "https://seedanceapi.duckcloud.fun")
+    SEEDANCE_API_BASE_URL = os.getenv("API_BASE_URL", "http://seedanceapi.duckcloud.fun")
 
 
 def get_seedance_auth_headers() -> dict:
@@ -108,10 +110,16 @@ def request_with_retry(method, url, max_retries=3, timeout=60.0, **kwargs):
                     
                     # 如果响应状态码不是 2xx，记录更多信息
                     if response.status_code >= 400:
-                        print(f"[API] 请求失败: HTTP {response.status_code} - {response.text[:200]}")
-                        response.raise_for_status()
+                        error_text = response.text[:500]
+                        print(f"[API] 请求失败: HTTP {response.status_code} - {error_text}")
+                        # 抛出包含更多信息的自定义异常，或者在 raise_for_status 之前抛出
+                        raise Exception(f"{response.status_code} {response.reason_phrase}: {error_text}")
                         
-                    return response.json()
+                    try:
+                        return response.json()
+                    except Exception as json_err:
+                        print(f"[API] 解析 JSON 失败: {str(json_err)}")
+                        return {"success": True, "message": "请求成功但解析 JSON 失败", "text": response.text}
             except (httpx.HTTPError, ssl.SSLError, Exception) as e:
                 last_error = e
                 # 如果是 SSL 错误且当前验证为 True，则跳出重试循环，尝试下一个配置
@@ -188,15 +196,23 @@ def upload_image(file_path: str) -> dict:
         return {"success": False, "message": f"图片文件不存在: {file_path}"}
 
     try:
+        # 读取文件内容到内存，避免重试时文件指针问题
         with open(path, "rb") as f:
-            files = {"file": (path.name, f, _get_content_type(path.suffix))}
-            return request_with_retry(
-                "POST",
-                f"{SEEDANCE_API_BASE_URL}/api/upload/",
-                files=files,
-                headers=get_seedance_auth_headers(),
-                timeout=60.0
-            )
+            file_content = f.read()
+
+        # 获取正确的 MIME 类型
+        content_type = _get_content_type(path.suffix)
+
+        # 使用元组格式：(文件名, 文件内容, MIME类型)
+        files = {"file": (path.name, file_content, content_type)}
+
+        return request_with_retry(
+            "POST",
+            f"{SEEDANCE_API_BASE_URL}/api/upload",
+            files=files,
+            headers=get_seedance_auth_headers(),
+            timeout=60.0
+        )
     except Exception as e:
         return {"success": False, "message": f"上传失败: {str(e)}"}
 
@@ -217,7 +233,7 @@ def create_seedance_video(prompt: str, model: str, duration: int, ratio: str, im
     try:
         return request_with_retry(
             "POST",
-            f"{SEEDANCE_API_BASE_URL}/api/video/create/",
+            f"{SEEDANCE_API_BASE_URL}/api/video/create",
             json=payload,
             headers=get_seedance_auth_headers(),
             timeout=120.0
@@ -233,7 +249,7 @@ def get_seedance_videos() -> list:
     try:
         result = request_with_retry(
             "GET",
-            f"{SEEDANCE_API_BASE_URL}/api/videos/",
+            f"{SEEDANCE_API_BASE_URL}/api/videos",
             headers=get_seedance_auth_headers(),
             timeout=30.0
         )
@@ -280,21 +296,92 @@ def find_seedance_video_by_task_id(task_id: str) -> dict:
 
 # ========== Sora2 API 函数 ==========
 
-def upload_image_to_url(file_path: str) -> str:
+def compress_image(file_path: str, max_size: int = 1024, quality: int = 85) -> bytes:
     """
-    将本地图片转换为 base64 data URL 或上传到图床
-    Sora2 需要图片 URL，这里使用 base64 data URL
+    压缩图片以减小 base64 编码后的大小
+
+    Args:
+        file_path: 图片文件路径
+        max_size: 最大边长 (像素)，默认 1024
+        quality: JPEG 压缩质量 (1-100)，默认 85
+
+    Returns:
+        压缩后的图片字节数据
+    """
+    try:
+        with Image.open(file_path) as img:
+            # 转换为 RGB (处理 RGBA/PNG 透明通道)
+            if img.mode in ('RGBA', 'LA', 'P'):
+                # 创建白色背景
+                background = Image.new('RGB', img.size, (255, 255, 255))
+                if img.mode == 'P':
+                    img = img.convert('RGBA')
+                background.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
+                img = background
+            elif img.mode != 'RGB':
+                img = img.convert('RGB')
+
+            # 获取原始尺寸
+            original_size = img.size
+
+            # 按比例缩放
+            if max(img.size) > max_size:
+                ratio = max_size / max(img.size)
+                new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
+                print(f"[图片压缩] 📐 尺寸: {original_size} → {new_size}")
+
+            # 压缩为 JPEG 格式
+            buffer = io.BytesIO()
+            img.save(buffer, format='JPEG', quality=quality, optimize=True)
+            compressed_data = buffer.getvalue()
+
+            # 计算压缩率
+            original_file_size = os.path.getsize(file_path)
+            compressed_size = len(compressed_data)
+            ratio = (1 - compressed_size / original_file_size) * 100 if original_file_size > 0 else 0
+            print(f"[图片压缩] 📦 大小: {original_file_size/1024:.1f}KB → {compressed_size/1024:.1f}KB (压缩 {ratio:.1f}%)")
+
+            return compressed_data
+    except Exception as e:
+        print(f"[图片压缩] ⚠️ 压缩失败，使用原图: {e}")
+        # 压缩失败时返回原始文件内容
+        with open(file_path, "rb") as f:
+            return f.read()
+
+
+def upload_image_to_url(file_path: str, compress: bool = True, max_size: int = 1024, quality: int = 85) -> str:
+    """
+    将本地图片转换为 base64 data URL
+    支持压缩以减小请求体积
+
+    Args:
+        file_path: 图片文件路径
+        compress: 是否压缩图片，默认 True
+        max_size: 压缩时的最大边长
+        quality: JPEG 压缩质量
+
+    Returns:
+        base64 data URL 字符串
     """
     path = Path(file_path)
     if not path.exists():
         return None
 
     try:
-        with open(path, "rb") as f:
-            image_data = f.read()
-            base64_data = base64.b64encode(image_data).decode('utf-8')
+        if compress:
+            # 使用压缩后的图片数据
+            image_data = compress_image(file_path, max_size, quality)
+            content_type = "image/jpeg"  # 压缩后统一为 JPEG
+        else:
+            # 使用原始图片数据
+            with open(path, "rb") as f:
+                image_data = f.read()
             content_type = _get_content_type(path.suffix)
-            return f"data:{content_type};base64,{base64_data}"
+
+        base64_data = base64.b64encode(image_data).decode('utf-8')
+        print(f"[图片转换] ✅ Base64 大小: {len(base64_data)/1024:.1f}KB")
+        return f"data:{content_type};base64,{base64_data}"
     except Exception as e:
         print(f"[Sora2] 图片转换失败: {e}")
         return None
@@ -479,6 +566,7 @@ def create_sora2free_video(prompt: str, model: str, image_urls: list = None) -> 
                 full_content = ""
                 result_urls = []
                 raw_response = ""
+                error_message = None  # 用于捕获错误信息
 
                 for line in response.iter_lines():
                     if line:
@@ -493,6 +581,14 @@ def create_sora2free_video(prompt: str, model: str, image_urls: list = None) -> 
                                 continue
                             try:
                                 chunk = json_module.loads(data)
+
+                                # 🔴 优先检查错误响应
+                                if chunk.get('error'):
+                                    error_obj = chunk.get('error', {})
+                                    error_message = error_obj.get('message', str(error_obj))
+                                    print(f"[Sora2免费] ❌ API返回错误: {error_message[:200]}")
+                                    # 不立即返回，继续读取流直到结束
+                                    continue
 
                                 # 检查是否是最终结果格式 (包含 result_urls)
                                 if chunk.get('result_urls'):
@@ -518,6 +614,13 @@ def create_sora2free_video(prompt: str, model: str, image_urls: list = None) -> 
                             # 尝试直接解析为 JSON（图生视频可能返回直接 JSON）
                             try:
                                 result = json_module.loads(line)
+                                # 🔴 检查错误响应
+                                if result.get('error'):
+                                    error_obj = result.get('error', {})
+                                    error_message = error_obj.get('message', str(error_obj))
+                                    print(f"[Sora2免费] ❌ API返回错误: {error_message[:200]}")
+                                    continue
+
                                 # 检查是否包含 result_urls
                                 if result.get('result_urls'):
                                     result_urls = result.get('result_urls', [])
@@ -534,6 +637,10 @@ def create_sora2free_video(prompt: str, model: str, image_urls: list = None) -> 
                                         break
                             except json_module.JSONDecodeError:
                                 pass
+
+                # 🔴 如果有错误信息，优先返回错误
+                if error_message and not video_url:
+                    return {"success": False, "message": f"API错误: {error_message}"}
 
                 # 如果还没找到，尝试从完整响应中解析
                 if not video_url and raw_response:
